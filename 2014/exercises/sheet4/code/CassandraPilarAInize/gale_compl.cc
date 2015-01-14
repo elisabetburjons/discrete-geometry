@@ -21,7 +21,16 @@
 #include "polymake/SparseMatrix.h"
 #include "polymake/ListMatrix.h"
 #include "polymake/IncidenceMatrix.h"
-
+#include "polymake/PowerSet.h"
+#include "polymake/Array.h"
+#include "polymake/linalg.h"
+#include "polymake/Integer.h"
+#include <string>
+#include <iostream>
+#include <set>
+#include <vector>
+#include <list>
+#include <iterator>
 
 
 namespace polymake { namespace polytope {
@@ -62,68 +71,187 @@ Matrix<Rational> enumerate_configurations(int e,int n,int m)
     return C;
 }
 
-    class Configuration{
+    class Galepolytope{
+    public:
+        Galepolytope();
         Vector<Integer> vec;
         Matrix<Rational> G;
-        Matrix<Integer> C;//cocircuits
-        
-        Configuration(const Vector<Integer>& _v,
-                      const Matrix<Rational>& _G,
-                      const Matrix<Integer>& _C)
-        : vec(_v)
-        , G(_G)
-        , C(_C) {}
-    };
+        Matrix<Integer> C;//circuits
+        int n_facets;
+        Rational maxn_vertex;
+    } ;
     
-    // Configuration conf(vec1, G1, C1);
-    // std::vector<Configuration> conf_vec;
-    // conf_vec.push_back(conf);
-    // w += conf.vec:
-
-Matrix <Rational> gale_compl(int e,int n,int m)
-{
-    const Matrix<Rational> configs=enumerate_configurations(e,n,m);
-    //interating through all the conf we got for validation:
-    //first chech if it is ordered
-    for(Entire <Rows<Matrix<Integer> > >::const_iterator rit=entire(rows(configs)); !rit.at_end(); ++rit){
-        const Vector<Integer> configs[*rit];
-         for (int i=0; i<n; i += e+1) {
-            if ( lexicographical_compare(configs[*rit][0]+i,
-                                              configs[*rit][0]+e+i,
-                                              configs[*rit][0]+e+1+i,
-                                              configs[*rit][0]+2*e+1+i)==0){
-                ignore(configs[*rit]);}}// ignore the not ordered configs. (the iterator rit is not correctly defined)
-             //Now enumerate cocircuits:
-             
-        
+    
+    
+    bool lexicoordered(const Vector<Integer>& V ,int n, int e){
+        for (int i=0; i<n; i += e+1) {
+           if (V.slice(i,e) >= V.slice(e+1+i, e)) {
+              return false;
+           }
+        }
+        return true;
     }
-}
+
+    bool cocircuits_or_fail(const Matrix<Rational>& G,
+                            std::vector<Set<int> >& positive_parts,
+                            std::vector<Set<int> >& negative_parts,
+                            bool allow_fail=true)
+    {
+        const int n = G.rows(), e = G.cols();
+        for (Entire<Subsets_of_k<const sequence&> >::const_iterator sit = entire(all_subsets_of_k(sequence(0, n), e-1)); !sit.at_end(); ++sit) {
+            const Matrix<Rational> ker = null_space(G.minor(*sit, All));
+            if (ker.rows() >= 2) continue;
+            
+            Set<int> plus, minus;
+            for (int i=0; i<n; ++i) {
+                const Rational val(ker[0] * G[i]);
+                if (val > 0) plus += i;
+                else if (val < 0) minus += i;
+            }
+            if (allow_fail &&
+                (plus.size() == 1 ||
+                 minus.size() == 1 ||
+                 plus.size() == 0 && minus.size() == 0)) // not full-dimensional
+                return false;
+            positive_parts.push_back(plus);
+            negative_parts.push_back(minus);
+        }
+        return 
+           positive_parts.size() > 0 || 
+           negative_parts.size() > 0;
+    }
     
+    template<typename E>
+    bool compare_matrices(const Matrix<E>& M1,const Matrix<E>& M2)
+    {
+        int nequal=0;
+        for (int i=0;i<M1.rows();++i){
+            for (int j=0; j<M2.rows();++j){
+                if (M1[i]==M2[j]) {
+                   nequal++;
+                }
+            }
+        }
+        return nequal == M1.rows();
+    }
     
+    bool compare_polytopes(const Galepolytope& P1, const Galepolytope& P2)
+    {
+       if (P1.n_facets<P2.n_facets) {
+          return false;
+       } else if (P1.n_facets == P2.n_facets) {
+          if (P1.maxn_vertex < P2.maxn_vertex) {
+             return false;
+          }
+       }
+       return true;
+    }
+
+    //empty list of polytopes
+std::list<Galepolytope> polylist;
     
+int gale_compl(int e,int n,int m)
+{
+   throw std::runtime_error("Please adjust the return type of gale_compl()");
+    const Matrix<Rational> configs=enumerate_configurations(e,n,m);
+    //for each configuration:
+    for(Entire <Rows< Matrix<Rational> > >::const_iterator rit = entire(rows(configs)); !rit.at_end(); ++rit){
+        
+        const Vector<Integer> v(*rit);
+        // first check if it is ordered
+        if (!lexicoordered(v,n,e)) {
+           continue;
+        }
+                        
+        throw std::runtime_error("Please check that the calculation on line __LINE__ is correct and does what you want!");
+        // (n-1)(e+1) + e-1 = ne - e + n + e - 1 = n(e-1) - 1
+        Matrix<Rational> G(n, n*(e-1) - 1); // you need to initialize the matrix with its dimensions
+        for (int i=0; i<n; i += e+1) {
+           for (int j=0; j<e; ++j) {
+              G[i][j] = v[i+j];
+           }
+        }
+        
+        std::vector<Set<int> > positive_parts, negative_parts;
+        if (!cocircuits_or_fail(G, positive_parts, negative_parts)) {
+           continue;
+        }
+
+        //circuits
+        Set<int>  negative_index;
+        const Matrix<Rational> ker=null_space(G);
+        Matrix<Rational> circuits=ker;
+        for (int i=0; i<ker.rows();++i) {
+            for (int j=0; j<ker.cols();++j) {
+                if (ker[i][j]>0) {
+                   circuits[i][j]=1;
+                } else if (ker[i][j]<0) {
+                   circuits[i][j]=-1;
+                   negative_index.push_back(i);
+                }
+            }
+        }
+        circuits=circuits.minor(~negative_index,All);
+        
+        Rational max=0;
+        for (int i=0; i<circuits.rows(); ++i) {
+            Rational sum=0;
+            for (int j=0; j<circuits[i].size(); ++j) {
+                sum += circuits[i][j];
+            }
+            if (sum>max){
+               max=sum;
+            }
+        }
+
+        //P.maxn_vertex=max;
+        //Galepolytope Po(v,G,circuits,circuits.rows(),max);
+        Galepolytope Po;
+        Po.vec=v;
+        Po.G=G;
+        Po.C=circuits;
+        Po.n_facets=circuits.rows();
+        Po.maxn_vertex=max;
+        
+        //add to list
+        
+        polylist.push_back(Po);
+    }
     
+    //analyze the list we got:
+    //order the list by number of facets:
     
+
+    polylist.sort(compare_polytopes);
     
+        
+    for (std::list<Galepolytope>::const_iterator iterator = polylist.begin(), end = polylist.end(); iterator != end; ++iterator)
+    {   
+       throw std::runtime_error("The loop on line __LINE__ has a signpost error. In the last iteration, *++iterator will be invalid");
+       Galepolytope P1=*iterator;
+       Galepolytope P2=*++iterator;
+       if (P1.n_facets != P2.n_facets) continue;
+       if (P1.maxn_vertex != P2.maxn_vertex) continue;
+       throw std::runtime_error("You cannot modify a list while you are iterating through it, this invalidates your iterators.");
+       if( compare_matrices(P1.C,P2.C)) {
+          //          polylist.remove(*iterator);
+       }
+    }
     
-    
-    
-    
-    
-    
-    
-    
+    return polylist.size();
+}    
     
     
     
 
 
 UserFunctionTemplate4perl("# @category Computations"
-                          "# Compute a vector that selects the inclusion-minimal face "
-			  "# that contains the vertices indexed by I."
-                          "# @param Polytope P the input polytope"
-                          "# @param Set I the indices of some vertices of P"
-                          "# @return Vector",
-			  "face_selector(Polytope, Set)" );
+                          "# FIXME"
+                          "# @param FIXME"
+                          "# @param FIXME"
+                          "# @param FIXME"
+                          "# @return FIXME",
+			  "gale_compl($$$)" );
 
 } }
 
